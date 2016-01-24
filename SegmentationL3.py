@@ -9,14 +9,17 @@ import crino
 from crino.network import MultiLayerPerceptron
 import scipy.io as sio
 import scipy
-from cv2 import imshow
+import scipy.ndimage
+from cv2 import imshow ,waitKey
 from PyQt4 import QtGui, QtCore
 
-from inner_part import find_lumbar_center
 import cv2
 from math import cos, sin
 
 from pylab import dot
+
+import sys
+import dicom
 
 def normalise(image):
 	"""
@@ -55,6 +58,9 @@ def huall(image):
 	return imageTemp
 
 def get_masque(imageHU,seuilInf,seuilMax):
+        """
+        Effectue un seuillage sur une image en HU pour les valeurs compris entre seuilInf et seuilMax
+        """
 	masque=np.zeros(imageHU.shape)
 
 	for i in range(imageHU.shape[0]-1): #on peut par exemple parcourir jusqu'au mini de la shape
@@ -173,23 +179,6 @@ def recaler(imageARecaler, modele,masque_muscle,centre_lombaire_image_a_recaler,
 	largeur_image,hauteur_image,centre_image=infos_image(masque_muscle)
 
 
-	#print(bounding_box_modele)
-	#print(bounding_box_image_a_recaler)
-	# a priori les bonnes bounding box
-	'''
-	print('centres des lombaire, muscle puis modele')
-	print(centre_lombaire_image_a_recaler)
-	print(centre_lombaire_modele)
-	print('centres des bounding, muscle puis modele')
-	print(centre_image)
-	print(centre_modele)
-	'''
-	#masque_modele[centre_lombaire_modele[1],centre_lombaire_modele[0]]=1
-	#imshow('teste stertraegrea',masque_modele.astype(float))
-	#cette synthaxe permet de mettre le centre au bon endroit
-
-	#tfMat=np.array([[1,0,centre_lombaire_modele[0]],[0,1,centre_lombaire_image_a_recaler[1]],[0,0,1]])
-	#tfMat=np.array([[1,0,centre_image[0]],[0,1,centre_image[1]],[0,0,1]])
 	tfMat=np.array([[1,0,centre_modele[0]],[0,1,centre_modele[1]],[0,0,1]])
 
 	tfMatInv=np.linalg.inv(tfMat)
@@ -254,7 +243,6 @@ def recaler(imageARecaler, modele,masque_muscle,centre_lombaire_image_a_recaler,
 
 			final_warp[i][j]=dot(final_warp[i][j],warp_init)			
 			warp_init=final_warp[i][j]
-			#temp=cv2.warpAffine(masque_modele,warp_init[0:2,:],(n,m))
 
 			#-------------------------
 			mat_trans=np.linalg.inv(warp_init)
@@ -274,14 +262,8 @@ def recaler(imageARecaler, modele,masque_muscle,centre_lombaire_image_a_recaler,
 	print('angle optimal :')
 	print(angle_opti)
 
-	#print(matrice)
 	matrice_temp=np.linalg.inv(matrice_recalage)
 	modele_recale_temp=cv2.warpAffine(masque_modele,matrice_temp[0:2,:],(n,m))
-
-
-	if (handle):
-		imshow('image du modele',masque_modele.astype(float))
-		imshow('test de matrice inverse',modele_recale_temp.astype(float))
 
 
 
@@ -298,7 +280,9 @@ def recaler(imageARecaler, modele,masque_muscle,centre_lombaire_image_a_recaler,
 		return temp
 
 def infos_image(image):
-	#a priori, cette fonction retourne le bon centre et donc les bonnes valeurs de hauteur et de largeur
+        """
+        Permet d'obtenir la largeur, hauteur et les coordonnées du centre d'un masque binaire
+        """
 	bounding_box=get_bouding_box(image)
 	largeur=bounding_box[0,1]-bounding_box[0,0]
 	hauteur=bounding_box[1,1]-bounding_box[1,0]
@@ -307,6 +291,9 @@ def infos_image(image):
 	return [largeur, hauteur ,centre]
 
 def get_indice_max_matrice(mat):
+	"""
+	Permet d'obtenir les indices i et j correspondant à la valeur max de la matrice
+	"""
 	maxi=mat[0,0]
 	imax=0
 	jmax=0
@@ -375,19 +362,134 @@ def get_bouding_box(image):
 	return np.array([[x_min,x_max],[y_min,y_max]])
 
 
+def find_lumbar_center(image):
+	"""
+		Permet de trouver le centre de la lombaire L3 ainsi qu'un masque de la L3
+	"""
+
+	masque_lombaire=np.zeros(image.shape)
+	masque_lombaire[image>130]=1
+
+	if (masque_lombaire.any()==1):
+
+		rayon=2
+		y,x=np.ogrid[-rayon:rayon+1,-rayon:rayon+1]
+		mask_disk=x**2+y**2<=rayon**2
+
+
+		label,num=scipy.ndimage.measurements.label(masque_lombaire)           
+		sizes=scipy.ndimage.sum(image,label,range(num+1)).astype(int)
+		mask_size=sizes<sizes.max() #vecteur de booléen
+		remove_pixel=mask_size[label]
+		masque_lombaire[remove_pixel]=0
+		rows,col=np.where(masque_lombaire==1)
+		centreL3_x=int(col.mean())
+		centreL3_y=int(rows.mean())
+		masque_lombaire[centreL3_y,centreL3_x]=1 # la ligne = y et la colonne = x
+		masque_lombaire_plein=scipy.ndimage.morphology.binary_fill_holes(masque_lombaire.astype(int))
+		return [centreL3_x,centreL3_y, masque_lombaire_plein]
+
+	else:
+		raise Exception('Pas de lombaire détectée.')
+
+def rescale(data):
+	"""
+		Permet de passer d'une représentation en 16 bit de l'image à des valeurs en HU.
+	"""
+    # get numpy array as representation of image data
+    arr = data.pixel_array.astype(np.float64)
+
+    # pixel_array seems to be the original, non-rescaled array.
+    # If present, window center and width refer to rescaled array
+    # -> do rescaling if possible.
+    if ('RescaleIntercept' in data) and ('RescaleSlope' in data):
+        intercept = data.RescaleIntercept  # single value
+        slope = data.RescaleSlope
+        slopef=slope.__float__()
+        interceptf=intercept.__float__()
+        arr = arr*slopef+interceptf
+        return arr
+
+def retire_table(imageHU):
+	"""
+		Permet de retirer la table d'une seule image en unités HU
+	"""
+	imgTemp=np.zeros(imageHU.shape)
+
+	for i in range(imgTemp.shape[0]):
+		for j in range(imgTemp.shape[1]):
+			if imageHU[i,j]>-190:
+				imgTemp[i,j]=1
+			else:
+					imgTemp[i,j]=0
+
+	label,num=scipy.ndimage.measurements.label(imgTemp)
+
+	sizes=scipy.ndimage.sum(imgTemp,label,range(num+1)).astype(int)
+	mask_size=sizes<sizes.max() #vecteur de booléen
+	remove_pixel=mask_size[label]
+	imageHU[remove_pixel]=-1024
+
+def transform_numpy_arr(arrParam, window_center, window_width,
+                           lut_min=0, lut_max=255):
+	"""
+		Look up table qui permet de passer des valeurs en HU à des valeurs sur 8bits entre 0 et 255 que l'on peut affichier facilement.
+		:Parametre:
+			window_center : valeur centrale sur laquelle on recentre les valeurs
+			window_width : largeur de la fenetre
+	"""
+    arr=arrParam.__deepcopy__(arrParam)
+
+    if np.isreal(arr).sum() != arr.size:
+        raise ValueError
+
+    # currently only support 8-bit colors
+    if lut_max != 255:
+        raise ValueError
+
+    if arr.dtype != np.float64:
+        arr = arr.astype(np.float64)
+
+    # LUT-specific array scaling
+    # width >= 1 (DICOM standard)
+    window_width = max(1, window_width)
+
+    wc, ww = np.float64(window_center), np.float64(window_width)
+    lut_range = np.float64(lut_max) - lut_min
+
+    minval = wc - 0.5 - (ww - 1.0) / 2.0
+    maxval = wc - 0.5 + (ww - 1.0) / 2.0
+
+    min_mask = (minval >= arr)
+    to_scale = (arr > minval) & (arr < maxval)
+    max_mask = (arr >= maxval)
+
+    if min_mask.any():
+        arr[min_mask] = lut_min
+    if to_scale.any():
+        arr[to_scale] = ((arr[to_scale] - (wc - 0.5)) /
+                         (ww - 1.0) + 0.5) * lut_range + lut_min
+    if max_mask.any():
+        arr[max_mask] = lut_max
+
+    # round to next integer values and convert to unsigned int
+    arr = np.rint(arr).astype(np.uint8)
+
+    # return PGM byte-data string
+    return arr
+
+
+  
 def segmentation_ioda(imageHU):
 	"""
 		Effectue la segmentation à partir d'une image en HU.
 	"""
 
 
-	#boite=sio.loadmat('./ioda_256/box_256.mat')
 	model_mat=sio.loadmat('./ioda_256/mean_model_256.mat')
 	modele=model_mat['model']
 	donnees_modele=modele[0,0]
 	
-	#image_modele=donnees_modele['image']
-
 
 	image=imageHU.__deepcopy__(imageHU)
 
@@ -398,12 +500,9 @@ def segmentation_ioda(imageHU):
 	masque_muscle_resize[masque_muscle_resize>0.5]=1
 	masque_muscle_resize[masque_muscle_resize<=0.5]=0
 
-	#imshow('masque muscle calculer au début', masque_muscle)
-	#print(np.unique(masque_muscle_resize))
-	#imshow('masque_muscle 256',masque_muscle_resize)
+
 
 	image=humuscle(image) #on ne garde que ce qui se trouve dans la plage des muscles
-	# pourquoi on a encore la lombaire ??? risque de poser probleme pour le recalage
 
 	image=normalise(image) #on la normalise
 
@@ -433,32 +532,36 @@ def segmentation_ioda(imageHU):
 
 	image=cv2.warpAffine(image,matrice_recalage_inverse[0:2,:],(n,m))
 
-	#test de normalisation
-	image=normalise(image) # ne change rien
+
 	#|
 	#\
 
+	boxMat=sio.loadmat('./ioda_256/box_256.mat')
+	box=boxMat['infos']['box'][0][0]
 
+	minY=box[0][0]-1
+	maxY=box[0][1]
+	minX=box[1][0]-1
+	maxX=box[1][1]
 
-	image=image[45:202,17:246] #crop à faire en dernier, apres le recalage. Utiliser les valeurs du fichier de config
-	#imshow('image dentree',image) #parait bien,  il faut toujours la recaler(position, angle), mettre à l'échelle
+	image=image[minX:maxX,minY:maxY] 
 
 	#--------------- initialisation du réseau --------------------------
 
+
 	print('Initialisation du réseau ...')
 	theano.config.floatX='float64' #initialisation
-	nFeats=35953
+	trained_weights = pickle.load(open('./ioda_256/learned_params_256.pck'))
+	nFeats=trained_weights['geometry'][0]
 	feats=nFeats
 	nLabels=nFeats
-	nHidden=400
-	geometry=[35953, 400, 400, 35953] # on utilise la géométre du fichier qui contient les learned_params
+	nHidden=trained_weights['geometry'][1]
+	geometry=[nFeats, nHidden, nHidden, nFeats] # on utilise la géométre du fichier qui contient les learned_params
 	nn = MultiLayerPerceptron(geometry,outputActivation=crino.module.Sigmoid)
-	nn.linkInputs(theano.tensor.matrix('x'), nFeats) #ce qui est marqué dans le code MATLAB
+	nn.linkInputs(theano.tensor.matrix('x'), nFeats)
 	nn.prepare(aPreparer=False) 
-	trained_weights = pickle.load(open('./ioda_256/learned_params_256.pck'))
 	nn.setParameters(trained_weights) 
 	print('fin de l initialisation')
-
 
 	# --------------------- segmentation ---------------------------
 	print('Debut de la segmentation ...')
@@ -470,30 +573,24 @@ def segmentation_ioda(imageHU):
 
 
 	#---------------------------------forward---------------------------------
-	# l'entrée du DNN à l'air correct à mis a part que pas de recalage et tjrs la peau
 
 	y_sortie = nn.forward(x_test[0:1]) #on a un y estime entre 0 et 1
-	y_sortie=normalise(y_sortie) #test
+	y_sortie=normalise(y_sortie) #
 
 	y_estim=np.zeros((157,229))
 	y_estim=y_sortie.reshape((157,229),order='F') #marche avec le order='F'
 
-	#imshow('proba de sorties',y_estim)
-	#y_estim=normalise(y_estim) #min=0 et max=1 ?
 
 	y_256=np.zeros((256,256))
 	y_256[45:202,17:246]=y_estim 
 
-	#imshow('sortie remise dans une image 256',y_256)
 	
 	sortie_recalee=cv2.warpAffine(y_256,matrice_recalage[0:2,:],(n,m))
 
 	y_512=scipy.misc.imresize(sortie_recalee,2.) 
-	#y_512=cv2.resize(y_256,dsize=(512,512))
 
 	y_512=normalise(y_512)
 
-	#imshow('sortie remise en 512 et recalee',y_512)
 
 	
 	masque=np.zeros((512,512))
@@ -502,14 +599,25 @@ def segmentation_ioda(imageHU):
 	masque[y_512>=0.2183]=1
 	
 
-	#imshow('masque des muscles',masque.astype(float))
 	print('Fin de la segmentation')
 
-	masque_tourne=np.zeros((512,512))
-	for i in range(masque_tourne.shape[0]):
-		for j in range(masque_tourne.shape[1]):
-			masque_tourne[i,j]=masque[j,i]
 
-	return masque_tourne
+	return masque
 
 
+def main(filename):
+	imageDicom=dicom.read_file(filename)
+	imageHU=rescale(imageDicom)
+	retire_table(imageHU)
+
+	masque_muscle=segmentation_ioda(imageHU)
+	imshow('masque issu de la segmentation',masque_muscle.astype(float))
+	imageAff=transform_numpy_arr(imageHU,200,800)
+	imshow('image a segmenter',imageAff)
+	waitKey(0)
+
+
+if __name__=='__main__':
+		filename=sys.argv[1:][0]
+		main(filename)
+        
