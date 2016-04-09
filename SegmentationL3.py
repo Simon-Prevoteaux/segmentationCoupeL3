@@ -163,7 +163,6 @@ def recaler(imageARecaler, modele,masque_muscle,centre_lombaire_image_a_recaler,
 		imshow('masque du muscle',masque_muscle)
 		imshow('masque du modele', masque_modele.astype(float))
 
-	# a priori ça fonctionne meme si le masque du muscle du coup est pas netoyé ( lombaire etc ) :///
 
 	masque_muscle=seuillage_80(masque_muscle,imageARecaler,handle=False)
 
@@ -196,7 +195,7 @@ def recaler(imageARecaler, modele,masque_muscle,centre_lombaire_image_a_recaler,
 			t=T[j]
 			warp_init=np.zeros((3,3))
 
-    		#--------------------recalage angle------------------------
+    			#--------------------recalage angle------------------------
 			angr=ang/180*3.14
 			warp_init=np.array([[cos(angr),-sin(angr),0],[sin(angr),cos(angr),0],[0,0,1]])
 			warp_init=dot(dot(tfMat,warp_init),tfMatInv)
@@ -206,7 +205,7 @@ def recaler(imageARecaler, modele,masque_muscle,centre_lombaire_image_a_recaler,
 			#-----------------------------------
 			mat_trans=np.linalg.inv(warp_init)
 			temp=cv2.warpAffine(masque_modele,mat_trans[0:2,:],(n,m))
-			#-----------------------
+			#-----------------------------------
 			
 
 			
@@ -236,10 +235,6 @@ def recaler(imageARecaler, modele,masque_muscle,centre_lombaire_image_a_recaler,
 			warp_init[1,2]=t*float(centre_lombaire_modele[1]-centre_lombaire_image_a_recaler[1]) + (1-t)*float(centre_modele[1]-centre_image[1])
 
 
-			'''
-			import pdb
-			pdb.set_trace()
-			'''
 
 			final_warp[i][j]=dot(final_warp[i][j],warp_init)			
 			warp_init=final_warp[i][j]
@@ -305,7 +300,7 @@ def get_indice_max_matrice(mat):
 				maxi=mat[i,j]
 
 	return [imax,jmax]
-	#return [jmax,imax]
+
 
 
 def get_bouding_box(image):
@@ -318,7 +313,6 @@ def get_bouding_box(image):
 	remove_pixel=mask_size[label]
 	image[remove_pixel]=0
 
-	#voir si ça change quelque chose
 	image[image>0]=1
 
 	parcourt=True
@@ -385,7 +379,7 @@ def find_lumbar_center(image):
 		rows,col=np.where(masque_lombaire==1)
 		centreL3_x=int(col.mean())
 		centreL3_y=int(rows.mean())
-		masque_lombaire[centreL3_y,centreL3_x]=1 # la ligne = y et la colonne = x
+		masque_lombaire[centreL3_y,centreL3_x]=1 
 		masque_lombaire_plein=scipy.ndimage.morphology.binary_fill_holes(masque_lombaire.astype(int))
 		return [centreL3_x,centreL3_y, masque_lombaire_plein]
 
@@ -399,9 +393,6 @@ def rescale(data):
     # get numpy array as representation of image data
     arr = data.pixel_array.astype(np.float64)
 
-    # pixel_array seems to be the original, non-rescaled array.
-    # If present, window center and width refer to rescaled array
-    # -> do rescaling if possible.
     if ('RescaleIntercept' in data) and ('RescaleSlope' in data):
         intercept = data.RescaleIntercept  # single value
         slope = data.RescaleSlope
@@ -443,15 +434,14 @@ def transform_numpy_arr(arrParam, window_center, window_width,
     if np.isreal(arr).sum() != arr.size:
         raise ValueError
 
-    # currently only support 8-bit colors
+
     if lut_max != 255:
         raise ValueError
 
     if arr.dtype != np.float64:
         arr = arr.astype(np.float64)
 
-    # LUT-specific array scaling
-    # width >= 1 (DICOM standard)
+
     window_width = max(1, window_width)
 
     wc, ww = np.float64(window_center), np.float64(window_width)
@@ -472,10 +462,10 @@ def transform_numpy_arr(arrParam, window_center, window_width,
     if max_mask.any():
         arr[max_mask] = lut_max
 
-    # round to next integer values and convert to unsigned int
+
     arr = np.rint(arr).astype(np.uint8)
 
-    # return PGM byte-data string
+
     return arr
 
 
@@ -506,7 +496,7 @@ def segmentation_ioda(imageHU):
 
 	image=normalise(image) #on la normalise
 
-	image=scipy.misc.imresize(image,0.5) #reduction en image 256*256, fonctionne
+	image=scipy.misc.imresize(image,0.5) #reduction en image 256*256
 	image=normalise(image) 
 
 
@@ -556,7 +546,7 @@ def segmentation_ioda(imageHU):
 	feats=nFeats
 	nLabels=nFeats
 	nHidden=trained_weights['geometry'][1]
-	geometry=[nFeats, nHidden, nHidden, nFeats] # on utilise la géométre du fichier qui contient les learned_params
+	geometry=[nFeats, nHidden, nHidden, nFeats] # on utilise la géométrie du fichier qui contient les learned_params
 	nn = MultiLayerPerceptron(geometry,outputActivation=crino.module.Sigmoid)
 	nn.linkInputs(theano.tensor.matrix('x'), nFeats)
 	nn.prepare(aPreparer=False) 
@@ -574,11 +564,11 @@ def segmentation_ioda(imageHU):
 
 	#---------------------------------forward---------------------------------
 
-	y_sortie = nn.forward(x_test[0:1]) #on a un y estime entre 0 et 1
-	y_sortie=normalise(y_sortie) #
+	y_sortie = nn.forward(x_test[0:1]) 
+	y_sortie=normalise(y_sortie) 
 
 	y_estim=np.zeros((157,229))
-	y_estim=y_sortie.reshape((157,229),order='F') #marche avec le order='F'
+	y_estim=y_sortie.reshape((157,229),order='F') 
 
 
 	y_256=np.zeros((256,256))
